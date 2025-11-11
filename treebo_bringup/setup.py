@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'bringup = treebo_bringup.bringup:main',
         ],
     },
 )
