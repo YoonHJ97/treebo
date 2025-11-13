@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'odom_publisher = treebo_odom.odom_publisher:main',
+            'odom_source = treebo_odom.odom_source:main',
         ],
     },
 )
