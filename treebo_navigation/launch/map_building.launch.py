@@ -1,74 +1,56 @@
-#!/usr/bin/env python3
-"""
-Launch Treebo bringup together with slam_toolbox for live map building.
-"""
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+import os
 
+def generate_launch_description():
+    pkg_nav = get_package_share_directory('treebo_navigation')
+    pkg_desc = get_package_share_directory('treebo_description')
 
-def generate_launch_description() -> LaunchDescription:
-    pkg_share = FindPackageShare("treebo_navigation")
+    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
 
-    use_sim_time = LaunchConfiguration("use_sim_time")
-    car_type = LaunchConfiguration("car_type")
-    slam_params_file = LaunchConfiguration("slam_params_file")
-    start_bringup = LaunchConfiguration("start_bringup")
+    ekf_yaml = os.path.join(pkg_nav, 'config', 'ekf_localization.yaml')
+    slam_yaml = os.path.join(pkg_nav, 'config', 'slam_toolbox_mapping.yaml')
+    urdf_xacro = os.path.join(pkg_desc, 'urdf', 'robot.urdf.xacro')
 
-    declare_use_sim_time = DeclareLaunchArgument(
-        "use_sim_time",
-        default_value="false",
-        description="Use Gazebo/Sim time if true",
-    )
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
 
-    declare_car_type = DeclareLaunchArgument(
-        "car_type",
-        default_value="X3",
-        description="Treebo car type to pass to treebo_bringup",
-    )
-
-    declare_slam_params = DeclareLaunchArgument(
-        "slam_params_file",
-        default_value=PathJoinSubstitution(
-            [pkg_share, "config", "slam_toolbox_mapping.yaml"]
+        # 로봇 모델 → TF(base_link 등) 출력을 위해 필수
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            parameters=[{'use_sim_time': use_sim_time}],
+            arguments=[urdf_xacro],
         ),
-        description="Full path to the slam_toolbox parameter file",
-    )
 
-    declare_start_bringup = DeclareLaunchArgument(
-        "start_bringup",
-        default_value="true",
-        description="If true run treebo_bringup in this launch file",
-    )
+        # EKF (odom→base_link + /odometry/filtered)
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            output='screen',
+            parameters=[ekf_yaml, {'use_sim_time': use_sim_time}],
+        ),
 
-    bringup_node = Node(
-        package="treebo_bringup",
-        executable="bringup",
-        name="treebo_bringup",
-        output="screen",
-        parameters=[{"car_type": car_type}],
-        condition=IfCondition(start_bringup),
-    )
+        # SLAM (map↔odom 제공)
+        Node(
+            package='slam_toolbox',
+            executable='sync_slam_toolbox_node',
+            name='slam_toolbox',
+            output='screen',
+            parameters=[slam_yaml, {'use_sim_time': use_sim_time}],
+        ),
 
-    slam_node = Node(
-        package="slam_toolbox",
-        executable="async_slam_toolbox_node",
-        name="slam_toolbox",
-        output="screen",
-        parameters=[slam_params_file, {"use_sim_time": use_sim_time}],
-    )
-
-    return LaunchDescription(
-        [
-            declare_use_sim_time,
-            declare_car_type,
-            declare_slam_params,
-            declare_start_bringup,
-            bringup_node,
-            slam_node,
-        ]
-    )
+        # RViz는 선택
+        # Node(
+        #     package='rviz2',
+        #     executable='rviz2',
+        #     name='rviz2',
+        #     arguments=['-d', os.path.join(pkg_nav, 'config', 'your_nav.rviz')],
+        #     parameters=[{'use_sim_time': use_sim_time}],
+        # ),
+    ])
