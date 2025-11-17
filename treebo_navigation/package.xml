@@ -7,10 +7,12 @@
   <maintainer email="xxbb96@gmail.com">hj</maintainer>
   <license>TODO: License declaration</license>
 
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>treebo_bringup</exec_depend>
+  <exec_depend>treebo_odom</exec_depend>
+  <exec_depend>sllidar_ros2</exec_depend>
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -8,23 +8,33 @@ slam_toolbox:
     base_frame: base_link
     scan_topic: /scan
 
+    # TF / 시간 관련 (드랍 완화용)
+    # TF 버퍼 길이 (기본 ~10s → 넉넉히 30s)
+    tf_buffer_duration: 30.0
+    # TF 변환을 기다리는 시간 (기본 0.2s 정도 → 1.0s)
+    transform_timeout: 1.0
+
     # General SLAM tuning
-    mode: mapping
-    resolution: 0.05
-    max_laser_range: 30.0
-    minimum_time_interval: 0.1
+    mode: mapping             # mapping / localization / continue_mapping 등
+    resolution: 0.05          # 그리드 해상도 (m)
+    max_laser_range: 30.0     # 라이다 최대 거리 (필요시 줄여도 됨: 15.0~20.0)
+
+    # 스캔 처리 주기 & 큐 크기
+    # 너무 자주 처리하면 TF/CPU 밀려서 드랍이 늘 수 있어서 약간 여유를 줌
+    minimum_time_interval: 0.2   # 초당 5Hz 정도로 처리 (원래 0.1)
+    scan_queue_size: 50          # message filter 큐 크기 (원래 10)
+
     enable_interactive_mode: false
 
-    # Matching / loop-closure
+    # Loop-closure / 매칭 관련
     max_submaps: 5
-    scan_queue_size: 10
     loop_search_maximum_distance: 10.0
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_maximum_variance_fine: 0.5
 
-    # Optimization / serialization
+    # Optimization / solver 설정
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI
@@ -32,8 +42,8 @@ slam_toolbox:
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
 
-    # Map building
+    # Map building / publish 주기
     map_start_pose: [0.0, 0.0, 0.0]
-    map_update_interval: 2.0
-    transform_publish_period: 0.02
-    publish_period: 0.5
+    map_update_interval: 2.0       # 맵 업데이트 주기 (초)
+    transform_publish_period: 0.02 # map→odom TF publish 주기
+    publish_period: 0.5            # 맵 토픽 publish 주기

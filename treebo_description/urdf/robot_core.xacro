@@ -176,8 +176,7 @@
     <joint name="laser_link_fixed_joint" type="fixed">
     <parent link="lidar_mount"/>
     <child link="laser_link"/>
-    <!-- 살짝 위로 올리고 뒤집어서 전방 스캔면 정렬 -->
-    <origin xyz="0.0 0.0 0.05" rpy="0 0 ${pi}"/>
+    <origin xyz="0.0 0.0 0.05" rpy="0 0 0"/>
     </joint>
 
 </robot>

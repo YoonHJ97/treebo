@@ -144,28 +144,31 @@ class TreeboBringup(Node):
         state_msg = JointState()
         enc_msg = Int32MultiArray()
 
+        state_msg = JointState()
         state_msg.header.stamp = time_stamp.to_msg()
         state_msg.header.frame_id = "joint_states"
 
         if len(self.prefix) == 0:
             state_msg.name = [
-                "back_right_joint",
-                "back_left_joint",
-                "front_left_steer_joint",
+                "rear_right_wheel_joint",
+                "rear_left_wheel_joint",
                 "front_left_wheel_joint",
-                "front_right_steer_joint",
                 "front_right_wheel_joint",
             ]
         else:
             p = self.prefix
             state_msg.name = [
-                p + "back_right_joint",
-                p + "back_left_joint",
-                p + "front_left_steer_joint",
+                p + "rear_right_wheel_joint",
+                p + "rear_left_wheel_joint",
                 p + "front_left_wheel_joint",
-                p + "front_right_steer_joint",
                 p + "front_right_wheel_joint",
             ]
+
+        n = len(state_msg.name)
+        state_msg.position = [0.0] * n
+        state_msg.velocity = [0.0] * n
+        state_msg.effort = [0.0] * n
+
 
         # 보드에서 버전 / 배터리 / IMU / 자기장 / 속도 / 인코더 읽기
         edition_msg.data = float(self.car.get_version())

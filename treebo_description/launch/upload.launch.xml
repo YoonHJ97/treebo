@@ -1,7 +1,7 @@
 <?xml version='1.0'?>
 
 <launch>
-    <arg name="use_sim_time" default="True"/>
+    <arg name="use_sim_time" default="False"/>
     <node pkg="robot_state_publisher" exec="robot_state_publisher" name='robot_state_publisher' 
                 output='screen'>
         <param name="robot_description" 
