@@ -1,12 +1,16 @@
 # Treebo
 
 sudo apt update
-sudo apt install \
-  ros-humble-xacro \
-  ros-humble-nav2-bringup \
-  ros-humble-slam-toolbox \
-  ros-humble-robot-state-publisher \
-  ros-humble-joint-state-publisher-gui \
-  ros-humble-rviz2 \
-  ros-humble-gazebo-ros-pkgs \
-  ros-humble-tf-transformations
+sudo apt install -y \
+  ros-humble-geometry-msgs \
+  ros-humble-sensor-msgs \
+  ros-humble-std-msgs \
+  ros-humble-nav-msgs \
+  ros-humble-tf2-ros \
+  ros-humble-tf-transformations \
+  ros-humble-launch \
+  ros-humble-launch-ros \
+  ros-humble-lifecycle-msgs \
+  ros-humble-ament-index-python \
+  python3-colcon-common-extensions
+
