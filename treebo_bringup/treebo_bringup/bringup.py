@@ -1,124 +1,190 @@
 #!/usr/bin/env python3
-# encoding: utf-8
+# -*- coding: utf-8 -*-
+
+import time
+import threading
+import serial
 
 import rclpy
 from rclpy.node import Node
-from rclpy.clock import Clock
-
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import JointState
 from std_msgs.msg import Int32MultiArray
-
-from treebo_bringup.treebolib import TreeboLib
 
 
 class TreeboBringup(Node):
-    def __init__(self) -> None:
+    """
+    - /cmd_vel 구독 → PWM 명령으로 변환 → UART로 "m m1 m2 m3 m4\n" 송신
+    - UART 수신에서 "ENC ms e1 e2 e3 e4" 파싱 → /encoder_raw(Int32MultiArray) 퍼블리시
+      data = [ms, e1, e2, e3, e4]  (e1~e4는 누적 tick)
+    """
+
+    def __init__(self):
         super().__init__("treebo_bringup")
 
-        # ---- 실제로 쓰는 파라미터만 ----
+        # ---- params ----
         self.declare_parameter("port", "/dev/ttyACM0")
-        self.declare_parameter("wheel_radius", 0.04)   # [m] ticks -> 거리 변환용
-        self.declare_parameter("ticks_per_rev", 4320)
-        self.declare_parameter("xlinear_limit", 0.5)   # /cmd_vel 제한
-        self.declare_parameter("angular_limit", 1.0)   # /cmd_vel 제한
-        self.declare_parameter("Prefix", "")           # joint 이름 prefix
+        self.declare_parameter("baudrate", 115200)
+        self.declare_parameter("serial_timeout", 0.05)
 
-        port = self.get_parameter("port").value
-        wheel_radius = float(self.get_parameter("wheel_radius").value)
-        ticks_per_rev = int(self.get_parameter("ticks_per_rev").value)
-        self.xlinear_limit = float(self.get_parameter("xlinear_limit").value)
-        self.angular_limit = float(self.get_parameter("angular_limit").value)
-        self.prefix = self.get_parameter("Prefix").value
+        self.declare_parameter("use_pwm", True)
+        self.declare_parameter("pwm_min", 1800)
+        self.declare_parameter("pwm_max", 3500)
 
-        # ---- Treebo 보드 연결 (모터+엔코더) ----
-        self.car = TreeboLib(
-            port=port,
-            baudrate=115200,
-            wheel_radius=wheel_radius,
-            base_length=0.095,
-            base_width=0.12,
-            ticks_per_rev=ticks_per_rev,
-            max_lin_vel=0.5,
-            debug=False,      # ← 로그 안 찍게
-        )
+        self.declare_parameter("max_lin_vel", 0.5)   # m/s, 정규화 기준
+        self.declare_parameter("max_ang_vel", 1.0)   # rad/s
 
-        # ENC total v1 v2 v3 수신용 스레드
-        self.car.create_receive_threading()
+        self.declare_parameter("vx_deadzone", 0.02)  # m/s
+        self.declare_parameter("wz_deadzone", 0.05)  # rad/s
+        self.declare_parameter("cmd_timeout", 0.4)   # sec
 
-        # enc_on/enc_off는 여기서 켜도 되고, 따로 스크립트에서 해도 됨
-        # 필요하면 주석 해제
-        # self.car.set_encoder_upload(True)
+        self.declare_parameter("track_width", 0.12)  # m (좌우 바퀴 거리, 차동근사에 사용)
 
-        # ---- ROS 통신 ----
-        self.cmd_vel_sub = self.create_subscription(
-            Twist, "cmd_vel", self.cmd_vel_callback, 10
-        )
+        self.port = self.get_parameter("port").value
+        self.baud = int(self.get_parameter("baudrate").value)
+        self.ser_timeout = float(self.get_parameter("serial_timeout").value)
 
-        self.encoder_pub = self.create_publisher(Int32MultiArray, "encoder_raw", 10)
-        self.joint_state_pub = self.create_publisher(JointState, "joint_states", 10)
+        self.use_pwm = bool(self.get_parameter("use_pwm").value)
+        self.pwm_min = int(self.get_parameter("pwm_min").value)
+        self.pwm_max = int(self.get_parameter("pwm_max").value)
+        if self.pwm_max < self.pwm_min:
+            self.pwm_max = self.pwm_min
 
-        # encoder 기반 속도 추정은 odom 노드에서 할 거면 여기선 안 해도 됨
-        # (지금은 encoder_raw만 퍼블리시)
-        self.timer = self.create_timer(0.1, self.pub_data)
+        self.max_lin = float(self.get_parameter("max_lin_vel").value)
+        self.max_ang = float(self.get_parameter("max_ang_vel").value)
 
-    # /cmd_vel → 보드로 속도 명령
-    def cmd_vel_callback(self, msg: Twist) -> None:
-        vx = max(min(msg.linear.x, self.xlinear_limit), -self.xlinear_limit)
-        vz = max(min(msg.angular.z, self.angular_limit), -self.angular_limit)
-        vy = 0.0
+        self.vx_deadzone = float(self.get_parameter("vx_deadzone").value)
+        self.wz_deadzone = float(self.get_parameter("wz_deadzone").value)
+        self.cmd_timeout = float(self.get_parameter("cmd_timeout").value)
 
-        self.car.set_car_motion(vx, vy, vz)
+        self.track = float(self.get_parameter("track_width").value)
 
-    # 주기적으로 encoder_raw + joint_states 퍼블리시
-    def pub_data(self) -> None:
-        now = Clock().now().to_msg()
+        # ---- serial ----
+        self.ser = serial.Serial(self.port, self.baud, timeout=self.ser_timeout)
+        time.sleep(2.0)
 
-        # 1) encoder_raw: [total, v1, v2, v3]
-        total, v1, v2, v3 = self.car.get_encoder()
-        enc_msg = Int32MultiArray()
-        enc_msg.data = [int(total), int(v1), int(v2), int(v3)]
-        self.encoder_pub.publish(enc_msg)
+        # ---- ros i/o ----
+        self.create_subscription(Twist, "cmd_vel", self.cb_cmd, 10)
+        self.pub_enc = self.create_publisher(Int32MultiArray, "encoder_raw", 50)
 
-        # 2) joint_states: URDF/RViz용 0값
-        js = JointState()
-        js.header.stamp = now
-        js.header.frame_id = "joint_states"
+        # ---- state ----
+        self.last_cmd_time = self.get_clock().now()
 
-        if len(self.prefix) == 0:
-            js.name = [
-                "rear_right_wheel_joint",
-                "rear_left_wheel_joint",
-                "front_left_wheel_joint",
-                "front_right_wheel_joint",
-            ]
+        # ---- rx thread ----
+        self._running = True
+        self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
+        self._rx_thread.start()
+
+        # ---- watchdog timer ----
+        self.create_timer(0.05, self._watchdog)
+
+        # stop at start
+        self._send_motor(0, 0, 0, 0)
+
+    @staticmethod
+    def _clamp(x, lo, hi):
+        return max(lo, min(hi, x))
+
+    def _to_pwm(self, x_norm: float) -> int:
+        """-1~1 → 0 또는 ±[pwm_min..pwm_max]"""
+        if abs(x_norm) < 1e-6:
+            return 0
+        s = 1 if x_norm > 0 else -1
+        a = self._clamp(abs(x_norm), 0.0, 1.0)
+        pwm = int(self.pwm_min + a * (self.pwm_max - self.pwm_min))
+        return s * pwm
+
+    def _send_motor(self, m1: int, m2: int, m3: int, m4: int):
+        cmd = f"m {int(m1)} {int(m2)} {int(m3)} {int(m4)}\n"
+        self.ser.write(cmd.encode("ascii"))
+        self.ser.flush()
+
+    def cb_cmd(self, msg: Twist):
+        vx = float(msg.linear.x)
+        wz = float(msg.angular.z)
+
+        vx = self._clamp(vx, -self.max_lin, self.max_lin)
+        wz = self._clamp(wz, -self.max_ang, self.max_ang)
+
+        if abs(vx) < self.vx_deadzone:
+            vx = 0.0
+        if abs(wz) < self.wz_deadzone:
+            wz = 0.0
+
+        # 차동근사: 좌/우 선속도
+        v_left = vx - wz * (self.track / 2.0)
+        v_right = vx + wz * (self.track / 2.0)
+
+        left_norm = self._clamp(v_left / max(self.max_lin, 1e-3), -1.0, 1.0)
+        right_norm = self._clamp(v_right / max(self.max_lin, 1e-3), -1.0, 1.0)
+
+        if self.use_pwm:
+            m_left = self._to_pwm(left_norm)
+            m_right = self._to_pwm(right_norm)
         else:
-            p = self.prefix
-            js.name = [
-                p + "rear_right_wheel_joint",
-                p + "rear_left_wheel_joint",
-                p + "front_left_wheel_joint",
-                p + "front_right_wheel_joint",
-            ]
+            m_left = int(left_norm * 1000)
+            m_right = int(right_norm * 1000)
 
-        n = len(js.name)
-        js.position = [0.0] * n
-        js.velocity = [0.0] * n
-        js.effort = [0.0] * n
+        # 4륜 매핑 (사용자 확인): m1=FL, m2=RL, m3=RR, m4=FR
+        self._send_motor(m_left, m_left, m_right, m_right)
 
-        self.joint_state_pub.publish(js)
+        self.last_cmd_time = self.get_clock().now()
+
+    def _watchdog(self):
+        now = self.get_clock().now()
+        dt = (now - self.last_cmd_time).nanoseconds * 1e-9
+        if dt > self.cmd_timeout:
+            self._send_motor(0, 0, 0, 0)
+
+    def _rx_loop(self):
+        buf = b""
+        while self._running:
+            try:
+                data = self.ser.read(128)
+                if not data:
+                    continue
+                buf += data
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    line = raw.strip().decode(errors="ignore")
+                    if not line:
+                        continue
+                    if line.startswith("ENC "):
+                        # ENC <ms> <e1> <e2> <e3> <e4>
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            try:
+                                ms = int(parts[1])
+                                e1 = int(parts[2])
+                                e2 = int(parts[3])
+                                e3 = int(parts[4])
+                                e4 = int(parts[5])
+                                msg = Int32MultiArray()
+                                msg.data = [ms, e1, e2, e3, e4]
+                                self.pub_enc.publish(msg)
+                            except ValueError:
+                                pass
+            except Exception:
+                time.sleep(0.01)
 
     def destroy_node(self):
+        self._running = False
         try:
-            self.car.set_car_motion(0.0, 0.0, 0.0)
-            # self.car.set_encoder_upload(False)  # enc_on 여기서 켰다면 끌 때 사용
-            self.car.close()
+            self._send_motor(0, 0, 0, 0)
+        except Exception:
+            pass
+        try:
+            if self._rx_thread is not None:
+                self._rx_thread.join(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            self.ser.close()
         except Exception:
             pass
         super().destroy_node()
 
 
-def main(args=None) -> None:
+def main(args=None):
     rclpy.init(args=args)
     node = TreeboBringup()
     try:
@@ -126,3 +192,7 @@ def main(args=None) -> None:
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

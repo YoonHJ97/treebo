@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-# encoding: utf-8
-
-"""
-odom_publisher.py (single-total version)
-
-- 구독:
-  - encoder_raw (std_msgs/Int32MultiArray)
-    data[0] = total encoder count (Yahboom $MAll:total,...# 에서 온 누적값)
-
-- 발행:
-  - /odom (nav_msgs/Odometry)
-  - TF: odom -> base_link
-
-특징:
-- 총 tick 값(total)만을 사용해서 "전후(x) 이동"만 계산.
-- 회전 속도(wz)는 계산할 수 없으므로 0으로 둔다.
-  (추후 IMU나 다른 센서와 결합해서 yaw를 추정하는 쪽으로 확장 가능)
-"""
+# -*- coding: utf-8 -*-
 
 import math
 
@@ -26,139 +9,148 @@ from rclpy.node import Node
 from std_msgs.msg import Int32MultiArray
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
-from tf_transformations import quaternion_from_euler
 from tf2_ros import TransformBroadcaster
 
 
-class EncoderOdomNode(Node):
+class TreeboOdom(Node):
+    """
+    /encoder_raw: Int32MultiArray data=[ms, e1, e2, e3, e4] (누적 tick)
+      - e1=m1(FL), e2=m2(RL) -> LEFT
+      - e3=m3(RR), e4=m4(FR) -> RIGHT
+
+    출력:
+      - /odom (nav_msgs/Odometry)
+      - TF: odom -> base_link
+    """
+
     def __init__(self):
-        super().__init__("encoder_odom_node")
+        super().__init__("treebo_odom")
 
-        # 바퀴 반지름 (m)
-        self.declare_parameter("wheel_radius", 0.04)
-        # 인코더 해상도 (counts / rev)
+        self.declare_parameter("wheel_radius", 0.04)   # m
         self.declare_parameter("ticks_per_rev", 4320)
-        # total tick의 부호 (앞으로 갔을 때 total이 감소하던가? 등에 맞춰 -1/1 설정)
-        self.declare_parameter("total_sign", -1)
+        self.declare_parameter("track_width", 0.12)    # m
 
-        self.wheel_radius = float(self.get_parameter("wheel_radius").value)
-        self.ticks_per_rev = int(self.get_parameter("ticks_per_rev").value)
-        self.total_sign = int(self.get_parameter("total_sign").value)
+        self.declare_parameter("odom_frame", "odom")
+        self.declare_parameter("base_frame", "base_link")
+        self.declare_parameter("publish_tf", True)
 
-        # 로봇 상태 (odom 좌표계)
+        self.R = float(self.get_parameter("wheel_radius").value)
+        self.tpr = int(self.get_parameter("ticks_per_rev").value)
+        self.track = float(self.get_parameter("track_width").value)
+
+        self.odom_frame = self.get_parameter("odom_frame").value
+        self.base_frame = self.get_parameter("base_frame").value
+        self.publish_tf = bool(self.get_parameter("publish_tf").value)
+
+        self.sub = self.create_subscription(Int32MultiArray, "encoder_raw", self.cb_enc, 50)
+        self.pub = self.create_publisher(Odometry, "odom", 50)
+        self.tfbr = TransformBroadcaster(self)
+
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
 
-        # 마지막 total, 시간
-        self.last_total = None
-        self.last_time = self.get_clock().now()
+        self.prev = None
+        self.prev_stamp = None
 
-        # 퍼블리셔 & TF
-        self.odom_pub = self.create_publisher(Odometry, "odom", 50)
-        self.tf_broadcaster = TransformBroadcaster(self)
+    @staticmethod
+    def _wrap(a):
+        while a > math.pi:
+            a -= 2.0 * math.pi
+        while a < -math.pi:
+            a += 2.0 * math.pi
+        return a
 
-        # 구독: encoder_raw (data[0] = total)
-        self.enc_sub = self.create_subscription(
-            Int32MultiArray,
-            "encoder_raw",
-            self.encoder_callback,
-            50,
-        )
+    def _ticks_to_dist(self, dticks: float) -> float:
+        return (dticks / float(self.tpr)) * (2.0 * math.pi * self.R)
 
-    def encoder_callback(self, msg: Int32MultiArray):
-        now = self.get_clock().now()
+    def _yaw_to_quat(self, yaw: float):
+        return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
 
-        if len(msg.data) < 1:
+    def cb_enc(self, msg: Int32MultiArray):
+        if len(msg.data) < 5:
             return
 
-        total = int(msg.data[0])
+        # data=[ms,e1,e2,e3,e4]  (누적 tick)
+        ms = int(msg.data[0])
+        e1, e2, e3, e4 = map(int, msg.data[1:5])
 
-        # 첫 콜백이면 기준만 잡고 리턴
-        if self.last_total is None:
-            self.last_total = total
-            self.last_time = now
+        left_now = (e1 + e2) / 2.0   # FL, RL
+        right_now = (e3 + e4) / 2.0  # RR, FR
+
+        stamp = self.get_clock().now()
+
+        if self.prev is None:
+            self.prev = (left_now, right_now)
+            self.prev_stamp = stamp
             return
 
-        dt = (now - self.last_time).nanoseconds * 1e-9
-        if dt <= 0.0:
-            self.last_total = total
-            self.last_time = now
+        dt = (stamp - self.prev_stamp).nanoseconds * 1e-9
+        if dt <= 1e-4:
             return
 
-        # total 변화량 (부호 조정)
-        dticks = (total - self.last_total) * self.total_sign
-        self.last_total = total
-        self.last_time = now
+        left_prev, right_prev = self.prev
+        dL_ticks = left_now - left_prev
+        dR_ticks = right_now - right_prev
 
-        # 바퀴 1rev 당 거리
-        wheel_circum = 2.0 * math.pi * self.wheel_radius
+        self.prev = (left_now, right_now)
+        self.prev_stamp = stamp
 
-        # 이동 거리 (m)
-        d = (dticks / float(self.ticks_per_rev)) * wheel_circum
+        dL = self._ticks_to_dist(dL_ticks)
+        dR = self._ticks_to_dist(dR_ticks)
 
-        # 선속도 v, 각속도 wz(=0)
-        v = d / dt
-        wz = 0.0
+        ds = (dR + dL) / 2.0
+        dyaw = (dR - dL) / max(self.track, 1e-6)
 
-        # odom 좌표계에서 적분
-        dx = d * math.cos(self.yaw)
-        dy = d * math.sin(self.yaw)
-        dyaw = wz * dt
+        yaw_mid = self.yaw + dyaw * 0.5
+        self.x += ds * math.cos(yaw_mid)
+        self.y += ds * math.sin(yaw_mid)
+        self.yaw = self._wrap(self.yaw + dyaw)
 
-        self.x += dx
-        self.y += dy
-        self.yaw += dyaw
-        self.yaw = math.atan2(math.sin(self.yaw), math.cos(self.yaw))
+        vx = ds / dt
+        wz = dyaw / dt
 
-        self.publish_odom_and_tf(now, v, wz)
+        qx, qy, qz, qw = self._yaw_to_quat(self.yaw)
 
-    def publish_odom_and_tf(self, stamp, v, wz):
-        qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.yaw)
-
-        # Odometry 메시지
         odom = Odometry()
         odom.header.stamp = stamp.to_msg()
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_link"
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = self.base_frame
 
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
+        odom.pose.pose.position.x = float(self.x)
+        odom.pose.pose.position.y = float(self.y)
         odom.pose.pose.position.z = 0.0
         odom.pose.pose.orientation.x = qx
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
 
-        odom.twist.twist.linear.x = v
-        odom.twist.twist.linear.y = 0.0
-        odom.twist.twist.angular.z = wz
+        odom.twist.twist.linear.x = float(vx)
+        odom.twist.twist.angular.z = float(wz)
 
-        self.odom_pub.publish(odom)
+        self.pub.publish(odom)
 
-        # TF (odom -> base_link)
-        tf_msg = TransformStamped()
-        tf_msg.header.stamp = stamp.to_msg()
-        tf_msg.header.frame_id = "odom"
-        tf_msg.child_frame_id = "base_link"
-        tf_msg.transform.translation.x = self.x
-        tf_msg.transform.translation.y = self.y
-        tf_msg.transform.translation.z = 0.0
-        tf_msg.transform.rotation.x = qx
-        tf_msg.transform.rotation.y = qy
-        tf_msg.transform.rotation.z = qz
-        tf_msg.transform.rotation.w = qw
-
-        self.tf_broadcaster.sendTransform(tf_msg)
+        if self.publish_tf:
+            t = TransformStamped()
+            t.header.stamp = odom.header.stamp
+            t.header.frame_id = self.odom_frame
+            t.child_frame_id = self.base_frame
+            t.transform.translation.x = float(self.x)
+            t.transform.translation.y = float(self.y)
+            t.transform.translation.z = 0.0
+            t.transform.rotation.x = qx
+            t.transform.rotation.y = qy
+            t.transform.rotation.z = qz
+            t.transform.rotation.w = qw
+            self.tfbr.sendTransform(t)
 
 
 def main(args=None):
+    import rclpy
     rclpy.init(args=args)
-    node = EncoderOdomNode()
+    node = TreeboOdom()   # ← 파일 안 클래스 이름과 동일해야 함
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()

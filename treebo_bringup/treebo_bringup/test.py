@@ -1,27 +1,44 @@
 import serial
 import time
 
-ser = serial.Serial('/dev/ttyACM0', 115200, timeout=0.1)
+PORT = "/dev/ttyACM0"   # Windows면 "COM5" 같은 형태
+BAUD = 115200
 
-def send_cmd(line: str):
-    msg = (line + '\n').encode('utf-8')
-    ser.write(msg)
-    ser.flush()
-    print(f"TX: {line}")
-    time.sleep(0.05)
+def send(ser, v1, v2, v3, v4):
+    cmd = f"m {v1} {v2} {v3} {v4}\n"
+    ser.write(cmd.encode("ascii"))
+    # print(cmd.strip())  # 필요하면 주석 해제
 
-try:
-    while True:
-        # 예: 뒤로 0.5 초 정도 굴리기
-        send_cmd("-500 0 0 0")
-        time.sleep(0.5)
-        send_cmd("0 0 0 0")
-        time.sleep(0.5)
+def main():
+    ser = serial.Serial(PORT, BAUD, timeout=0.2)
+    time.sleep(2.0)  # 보드 리셋/시리얼 안정화 대기
 
-        # 수신된 로그 프린트 (STM32가 보내는 SPD OK, PARSED 등)
-        data = ser.read(1024)
-        if data:
-            print("RX:", data.decode(errors='ignore'), end='')
+    # 1) 정지
+    send(ser, 0, 0, 0, 0)
+    time.sleep(1.0)
 
-except KeyboardInterrupt:
+    # 2) M1만 천천히 램프업/다운
+    for v in range(0, 2001, 200):   # 0 -> 400
+        send(ser, v, 0, 0, 0)
+        time.sleep(2.5)
+
+    for v in range(2000, -2001, -200):  # 400 -> -400
+        send(ser, v, 0, 0, 0)
+        time.sleep(2.5)
+
+    for v in range(-2000, 1, 200):  # -400 -> 0
+        send(ser, v, 0, 0, 0)
+        time.sleep(2.5)
+
+    # 3) 4개 동시에
+    for v in [100, 200, 300, 0, -200, 0]:
+        send(ser, v, v, v, v)
+        time.sleep(1.0)
+
+    # 4) 정지
+    send(ser, 0, 0, 0, 0)
+    time.sleep(0.5)
     ser.close()
+
+if __name__ == "__main__":
+    main()
