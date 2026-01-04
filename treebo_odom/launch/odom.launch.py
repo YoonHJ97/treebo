@@ -1,43 +1,81 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+
 def generate_launch_description():
-    return LaunchDescription([
-        Node(
-            package='treebo_odom',
-            executable='odom_publisher',
-            name='treebo_odom',
-            output='screen',
-            parameters=[{
-                # Frames
-                'odom_frame': 'odom',
-                'base_frame': 'base_link',
-                'publish_tf': True,
+    # ----- Launch Arguments -----
+    wheel_radius   = LaunchConfiguration("wheel_radius")
+    ticks_per_rev  = LaunchConfiguration("ticks_per_rev")
+    track_width    = LaunchConfiguration("track_width")
+    encoder_topic  = LaunchConfiguration("encoder_topic")
+    invert_left    = LaunchConfiguration("invert_left")
+    invert_right   = LaunchConfiguration("invert_right")
+    invert_translation = LaunchConfiguration("invert_translation")
+    invert_rotation = LaunchConfiguration("invert_rotation")
+    yaw_offset     = LaunchConfiguration("yaw_offset")
+    publish_tf     = LaunchConfiguration("publish_tf")
+    odom_frame     = LaunchConfiguration("odom_frame")
+    base_frame     = LaunchConfiguration("base_frame")
 
-                # Topics
-                'wheel_omega_topic': '/wheel_omega',
-                'vel_raw_topic': '/vel_raw',
-                'cmd_vel_topic': '/cmd_vel',
-                'imu_raw_topic': '/imu/data_raw',
-                'mag_topic': '/imu/mag',
+    return LaunchDescription(
+        [
+            # 기본값은 적당히 세팅해두고,
+            # 나중에 필요하면 bringup.launch.py에서 launch_arguments로 덮어쓸 수 있음
+            DeclareLaunchArgument("wheel_radius", default_value="0.04"),
+            DeclareLaunchArgument("ticks_per_rev", default_value="4320"),
+            DeclareLaunchArgument("track_width", default_value="0.391"),
 
-                # Vehicle params (차동/스키드-스티어)
-                'wheel_radius': 0.04,  # 40 mm
-                'track_width':  0.12,  # 120 mm
+            DeclareLaunchArgument("encoder_topic", default_value="encoder_raw"),
 
-                # Behavior
-                'use_cmd_vel_fallback': True,
+            DeclareLaunchArgument("invert_left", default_value="true"),
+            DeclareLaunchArgument("invert_right", default_value="true"),
+            DeclareLaunchArgument(
+                "invert_translation",
+                default_value="true",
+                description="Invert linear odometry direction",
+            ),
+            DeclareLaunchArgument(
+                "invert_rotation",
+                default_value="false",
+                description="Invert angular odometry direction",
+            ),
+            DeclareLaunchArgument(
+                "yaw_offset",
+                default_value="0.0",
+                description="Yaw offset in radians",
+            ),
+            DeclareLaunchArgument("publish_tf", default_value="true"),
 
-                # IMU / Magnetometer
-                'gyro_bias_z': 0.0,
-                'mag_declination': 0.0,  # 필요 시 +0.35 등으로 조정
-                'mag_alpha': 0.02,       # 보정 강도 (작게)
-                'mag_flip_y': False,     # 축 반전 필요 시 True
-                'mag_flip_x': False,
+            DeclareLaunchArgument("odom_frame", default_value="odom"),
+            DeclareLaunchArgument("base_frame", default_value="base_link"),
 
-                # Covariances
-                'cov_linear': 0.3,
-                'cov_angular': 0.5,
-            }],
-        ),
-    ])
+            # ----- Odometry Node -----
+            Node(
+                package="treebo_odom",
+                executable="odom_publisher",
+                name="treebo_odom",
+                output="screen",
+                parameters=[
+                            {
+                                "wheel_radius": wheel_radius,
+                                "ticks_per_rev": ticks_per_rev,
+                                "track_width": track_width,
+                                "encoder_topic": encoder_topic,
+                                "invert_left": invert_left,
+                                "invert_right": invert_right,
+                                "invert_translation": invert_translation,
+                                "invert_rotation": invert_rotation,
+                                "yaw_offset": yaw_offset,
+                                "publish_tf": publish_tf,
+                                "odom_frame": odom_frame,
+                                "base_frame": base_frame,
+                            }
+                ],
+            ),
+        ]
+    )

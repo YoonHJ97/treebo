@@ -50,8 +50,9 @@
     </link>
     <joint name="front_left_wheel_joint" type="continuous">
         <parent link="base_link"/>
-        <child link="front_left_wheel"/>
-        <origin xyz="0.12 0.175 0" rpy="-${pi/2} 0 0"/>
+        <child  link="front_left_wheel"/>
+        <!-- x = +0.095, y = +0.1075 -->
+        <origin xyz="0.095 0.1075 0" rpy="-${pi/2} 0 0"/>
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -70,8 +71,9 @@
     </link>
     <joint name="front_right_wheel_joint" type="continuous">
         <parent link="base_link"/>
-        <child link="front_right_wheel"/>
-        <origin xyz="0.12 -0.175 0" rpy="${pi/2} 0 0"/>
+        <child  link="front_right_wheel"/>
+        <!-- x = +0.095, y = -0.1075 -->
+        <origin xyz="0.095 -0.1075 0" rpy="${pi/2} 0 0"/>
         <axis xyz="0 0 -1"/>
     </joint>
 
@@ -90,8 +92,9 @@
     </link>
     <joint name="rear_left_wheel_joint" type="continuous">
         <parent link="base_link"/>
-        <child link="rear_left_wheel"/>
-        <origin xyz="-0.12 0.175 0" rpy="-${pi/2} 0 0"/>
+        <child  link="rear_left_wheel"/>
+        <!-- x = -0.095, y = +0.1075 -->
+        <origin xyz="-0.095 0.1075 0" rpy="-${pi/2} 0 0"/>
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -110,10 +113,12 @@
     </link>
     <joint name="rear_right_wheel_joint" type="continuous">
         <parent link="base_link"/>
-        <child link="rear_right_wheel"/>
-        <origin xyz="-0.12 -0.175 0" rpy="${pi/2} 0 0"/>
+        <child  link="rear_right_wheel"/>
+        <!-- x = -0.095, y = -0.1075 -->
+        <origin xyz="-0.095 -0.1075 0" rpy="${pi/2} 0 0"/>
         <axis xyz="0 0 -1"/>
     </joint>
+
 
     <link name="lidar_mount">
         <visual>

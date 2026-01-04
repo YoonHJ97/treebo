@@ -41,6 +41,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'initial_pose_publisher = treebo_navigation.initial_pose_publisher:main',
         ],
     },
 )

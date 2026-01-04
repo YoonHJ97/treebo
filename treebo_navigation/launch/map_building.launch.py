@@ -6,22 +6,14 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    EmitEvent,
-    RegisterEventHandler,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 
-from launch_ros.actions import LifecycleNode
-from launch_ros.events.lifecycle import ChangeState, matches_node_name
-from launch_ros.event_handlers import OnStateTransition
-
-from lifecycle_msgs.msg import Transition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
-    # ---------- Launch Arguments ----------
+    # --- 공통 Launch Argument ---
     use_sim_time = LaunchConfiguration("use_sim_time")
     slam_params_file = LaunchConfiguration("slam_params_file")
 
@@ -35,56 +27,31 @@ def generate_launch_description():
     default_slam_params = os.path.join(
         nav_share_dir, "config", "slam_toolbox_mapping.yaml"
     )
+
     declare_slam_params_file = DeclareLaunchArgument(
         "slam_params_file",
         default_value=default_slam_params,
         description="Full path to the slam_toolbox mapping parameter file",
     )
 
-    # ---------- Lifecycle Node: slam_toolbox ----------
-    slam_toolbox_node = LifecycleNode(
-        package="slam_toolbox",
-        executable="sync_slam_toolbox_node",
-        name="slam_toolbox",
-        namespace="",            # ★ 이 줄이 없어서 에러 났던 거
-        output="screen",
-        parameters=[
-            slam_params_file,
-            {"use_sim_time": use_sim_time},
-        ],
+    # --- slam_toolbox에서 제공하는 공식 launch 포함 ---
+    slam_share_dir = get_package_share_directory("slam_toolbox")
+    online_sync_launch = os.path.join(
+        slam_share_dir, "launch", "online_sync_launch.py"
     )
 
-    # 1) 노드가 뜨면 CONFIGURE 전이 보내기
-    configure_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_node_name("/slam_toolbox"),
-            transition_id=Transition.TRANSITION_CONFIGURE,
-        )
-    )
-
-    # 2) CONFIGURE → INACTIVE 로 넘어가면 ACTIVATE 전이 보내기
-    activate_event_handler = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=slam_toolbox_node,
-            start_state="configuring",
-            goal_state="inactive",
-            entities=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_node_name("/slam_toolbox"),
-                        transition_id=Transition.TRANSITION_ACTIVATE,
-                    )
-                )
-            ],
-        )
+    slam_include = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(online_sync_launch),
+        launch_arguments={
+            "slam_params_file": slam_params_file,
+            "use_sim_time": use_sim_time,
+        }.items(),
     )
 
     return LaunchDescription(
         [
             declare_use_sim_time,
             declare_slam_params_file,
-            slam_toolbox_node,
-            configure_event,
-            activate_event_handler,
+            slam_include,
         ]
     )

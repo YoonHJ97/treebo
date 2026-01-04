@@ -1,71 +1,73 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""treebo_bringup (calibrated)
+"""
+treebo_bringup_treebolib
 
-이 파일은 사용자가 진행한 보정 결과를 기본값으로 반영한 bringup입니다.
+TreeboBase (treebolib)를 사용해서 Rosmaster 보드를 제어하는 bringup 노드.
 
-주요 변경점
-1) PWM 모드에서 gain을 PWM에 곱하지 않고, norm(-1~1)에 곱한 뒤 _to_pwm()로 변환
-   - pwm_min(예: 1800) 아래로 내려가 바퀴가 멈추는 현상 방지
-2) cmd_vel의 angular.z에 turn_scale을 적용(회전만 증폭/감쇠 가능)
-3) 사용자가 튜닝한 gain / max_ang_vel / use_pwm_deadzone 기본값 반영
+- 하위: treebolib.TreeboBase (바이너리 시리얼 프로토콜)
+- 상위: /cmd_vel 구독 + 엔코더/휠속도 퍼블리시
 
-UART protocol
-  TX: "m <m1> <m2> <m3> <m4>\n"
-  RX: "ENC <ms> <e1> <e2> <e3> <e4>\n"  (누적 tick)
+주요 기능
+1) cmd_vel → 좌/우 속도로 변환 → per-motor gain / invert 적용
+2) PWM 모드: TreeboBase.set_wheel_pwm(-100~100) 사용
+3) auto_report를 통해 들어오는 엔코더 값을 주기적으로 읽어 퍼블리시
+4) cmd_timeout 초 동안 명령이 없으면 자동 정지
 
-Motor mapping (사용자 확인)
+Motor mapping (Rosmaster 기준)
   m1=FL, m2=RL, m3=RR, m4=FR
 """
 
 import time
-import threading
-import serial
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32MultiArray, Float32MultiArray
 
+from .treebolib import TreeboBase
 
-class TreeboBringup(Node):
+
+class TreeboBringupTreebolib(Node):
     def __init__(self):
         super().__init__("treebo_bringup")
 
-        # ---- Serial params ----
-        self.declare_parameter("port", "/dev/ttyACM0")
+        # ---- Serial / hardware params ----
+        self.declare_parameter("port", "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
         self.declare_parameter("baudrate", 115200)
-        self.declare_parameter("serial_timeout", 0.05)
+        self.declare_parameter("car_type", TreeboBase.CARTYPE_X3)
+        self.declare_parameter("debug_hw", False)
 
-        # ---- Command/PWM params ----
-        self.declare_parameter("use_pwm", True)
-        self.declare_parameter("pwm_min", 1800)
-        self.declare_parameter("pwm_max", 3500)
-
-        # 정규화 기준
-        self.declare_parameter("max_lin_vel", 0.5)      # m/s
-        self.declare_parameter("max_ang_vel", 6.0)      # rad/s  (사용자 실험값 반영)
-        self.declare_parameter("turn_scale", 1.5)       # angular.z 스케일(회전만 키우고 싶을 때)
-        self.declare_parameter("track_width", 0.12)     # m
+        # ---- Command / motion params ----
+        self.declare_parameter("use_motion_mode", False)   # True면 set_motion(vx,0,wz) 사용
+        self.declare_parameter("max_lin_vel", 0.5)         # m/s
+        self.declare_parameter("max_ang_vel", 6.0)         # rad/s
+        self.declare_parameter("turn_scale", 0.85)          # 회전만 키울 때
+        self.declare_parameter("track_width", 0.12)        # m (좌우 바퀴 간 거리)
 
         self.declare_parameter("vx_deadzone", 0.02)
         self.declare_parameter("wz_deadzone", 0.05)
         self.declare_parameter("cmd_timeout", 0.4)
 
-        # ---- Calibrated per-motor gain defaults (cmd_vel ~ 0.2 기준) ----
-        self.declare_parameter("gain_m1", 0.79)
-        self.declare_parameter("gain_m2", 0.48)
-        self.declare_parameter("gain_m3", 0.59)
-        self.declare_parameter("gain_m4", 0.98)
+        # ---- PWM 모드용 calib gain (정규화 기준 -1~1) ----
+        self.declare_parameter("gain_m1", 0.98)
+        self.declare_parameter("gain_m2", 0.98)
+        self.declare_parameter("gain_m3", 1.0)
+        self.declare_parameter("gain_m4", 1.0)
+        # ---- 방향별(후진) 보정 계수 ----
+        self.declare_parameter("gain_left_rev_factor", 1.0)   # left_norm < 0 일 때만 추가 곱
+        self.declare_parameter("gain_right_rev_factor", 1.0)  # right_norm < 0 일 때만 추가 곱
 
         self.declare_parameter("invert_m1", False)
         self.declare_parameter("invert_m2", False)
         self.declare_parameter("invert_m3", False)
         self.declare_parameter("invert_m4", False)
 
-        # ※ calibrated 방식에서는 deadzone을 끄는 쪽이 튜닝/재현성이 좋았음
-        self.declare_parameter("use_pwm_deadzone", False)
+        # Rosmaster PWM은 -100~100이지만,
+        # 너무 작을 때는 모터가 안 도는 deadzone이 있으므로
+        # |x|>0 일 때 최소 듀티(%)를 설정
+        self.declare_parameter("pwm_min_percent", 20.0)    # 0~100
 
         # ---- Debug / telemetry ----
         self.declare_parameter("debug_tx", False)
@@ -77,14 +79,10 @@ class TreeboBringup(Node):
         # ---- Read params ----
         self.port = str(self.get_parameter("port").value)
         self.baud = int(self.get_parameter("baudrate").value)
-        self.ser_timeout = float(self.get_parameter("serial_timeout").value)
+        self.car_type = int(self.get_parameter("car_type").value)
+        self.debug_hw = bool(self.get_parameter("debug_hw").value)
 
-        self.use_pwm = bool(self.get_parameter("use_pwm").value)
-        self.pwm_min = int(self.get_parameter("pwm_min").value)
-        self.pwm_max = int(self.get_parameter("pwm_max").value)
-        if self.pwm_max < self.pwm_min:
-            self.pwm_max = self.pwm_min
-
+        self.use_motion_mode = bool(self.get_parameter("use_motion_mode").value)
         self.max_lin = float(self.get_parameter("max_lin_vel").value)
         self.max_ang = float(self.get_parameter("max_ang_vel").value)
         self.turn_scale = float(self.get_parameter("turn_scale").value)
@@ -99,14 +97,19 @@ class TreeboBringup(Node):
             "m2": float(self.get_parameter("gain_m2").value),
             "m3": float(self.get_parameter("gain_m3").value),
             "m4": float(self.get_parameter("gain_m4").value),
-        }
+        }                                   
+        self.gain_left_rev_factor = float(self.get_parameter("gain_left_rev_factor").value)
+        self.gain_right_rev_factor = float(self.get_parameter("gain_right_rev_factor").value)                   
+        
         self.invert = {
             "m1": bool(self.get_parameter("invert_m1").value),
             "m2": bool(self.get_parameter("invert_m2").value),
             "m3": bool(self.get_parameter("invert_m3").value),
             "m4": bool(self.get_parameter("invert_m4").value),
         }
-        self.use_pwm_deadzone = bool(self.get_parameter("use_pwm_deadzone").value)
+
+        self.pwm_min_percent = float(self.get_parameter("pwm_min_percent").value)
+        self.pwm_min_percent = self._clamp(self.pwm_min_percent, 0.0, 100.0)
 
         self.debug_tx = bool(self.get_parameter("debug_tx").value)
         self.publish_wheel_speed = bool(self.get_parameter("publish_wheel_speed").value)
@@ -114,9 +117,19 @@ class TreeboBringup(Node):
         self.debug_enc_speed = bool(self.get_parameter("debug_enc_speed").value)
         self.debug_enc_period = float(self.get_parameter("debug_enc_period").value)
 
-        # ---- Serial open ----
-        self.ser = serial.Serial(self.port, self.baud, timeout=self.ser_timeout)
-        time.sleep(2.0)
+        # ---- Hardware bringup (TreeboBase) ----
+        self.base = TreeboBase(
+            port=self.port,
+            baudrate=self.baud,
+            car_type=self.car_type,
+            delay=0.002,
+            debug=self.debug_hw,
+        )
+        # 수신 스레드 + auto report 켜기
+        self.base.start_background_reader()
+        time.sleep(0.1)
+        self.base.set_auto_report(True, persist=False)
+        time.sleep(0.1)
 
         # ---- ROS I/O ----
         self.create_subscription(Twist, "cmd_vel", self.cb_cmd, 10)
@@ -132,23 +145,25 @@ class TreeboBringup(Node):
 
         # ---- State ----
         self.last_cmd_time = self.get_clock().now()
-        self._last_enc = None
+        self._last_enc = None  # (t, e1, e2, e3, e4)
         self._last_speed_log_t = time.time()
+        self._start_time = time.time()
 
-        # ---- RX thread ----
-        self._running = True
-        self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
-        self._rx_thread.start()
+        # ---- Timers ----
+        # cmd timeout watchdog
+        # self.create_timer(0.05, self._watchdog)
+        # encoder polling (TreeboBase 내부 상태를 읽어서 퍼블리시)
+        self.create_timer(0.05, self._enc_timer_cb)
 
-        # ---- Watchdog timer ----
-        self.create_timer(0.05, self._watchdog)
+        # 시작 시 정지
+        self._send_stop()
 
-        # Stop at start
-        self._send_motor(0, 0, 0, 0)
         self.get_logger().info(
-            f"Started(calib). UART={self.port}@{self.baud} "
-            f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},{self.gain['m3']:.2f},{self.gain['m4']:.2f}) "
-            f"max_ang={self.max_ang:.2f} turn_scale={self.turn_scale:.2f}"
+            f"TreeboBringupTreebolib started. port={self.port}@{self.baud}, "
+            f"car_type={self.car_type}, use_motion_mode={self.use_motion_mode}, "
+            f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},"
+            f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
+            f"pwm_min_percent={self.pwm_min_percent:.1f}"
         )
 
     # ---------- helpers ----------
@@ -156,166 +171,180 @@ class TreeboBringup(Node):
     def _clamp(x, lo, hi):
         return max(lo, min(hi, x))
 
-    def _to_pwm(self, x_norm: float) -> int:
-        """-1~1 → 0 또는 ±[pwm_min..pwm_max]"""
+    def _to_pwm_percent(self, x_norm: float) -> int:
+        """
+        -1~1 정규화 값을 -100~100 범위의 PWM(%)로 변환.
+        |x_norm|>0이면 최소 pwm_min_percent 이상이 되도록 보정.
+        """
         if abs(x_norm) < 1e-6:
             return 0
         s = 1 if x_norm > 0 else -1
         a = self._clamp(abs(x_norm), 0.0, 1.0)
-        pwm = int(self.pwm_min + a * (self.pwm_max - self.pwm_min))
-        return s * pwm
+
+        # 최소 듀티 확보 (deadzone 넘어가도록)
+        p = self.pwm_min_percent + a * (100.0 - self.pwm_min_percent)
+        p = self._clamp(p, 0.0, 100.0)
+        return int(round(s * p))
 
     def apply_gain_norm(self, x_norm: float, g: float, invert: bool) -> float:
-        """정규화(-1~1) 명령에 gain을 적용한 뒤, -1~1로 클램프해서 반환."""
+        """
+        정규화(-1~1) 명령에 gain을 적용한 뒤, -1~1로 클램프해서 반환.
+        """
         y = self._clamp(x_norm * g, -1.0, 1.0)
         if invert:
             y = -y
         return y
 
-    def _send_motor(self, m1: int, m2: int, m3: int, m4: int):
-        cmd = f"m {int(m1)} {int(m2)} {int(m3)} {int(m4)}\n"
-        self.ser.write(cmd.encode("ascii"))
-        self.ser.flush()
+    def _send_pwm(self, m1: int, m2: int, m3: int, m4: int):
+        """
+        Rosmaster 보드에 -100~100 범위의 PWM 퍼센트를 전송.
+        """
         if self.debug_tx:
-            self.get_logger().info(f"TX m {m1} {m2} {m3} {m4}")
+            self.get_logger().info(f"TX PWM m1={m1} m2={m2} m3={m3} m4={m4}")
+        self.base.set_wheel_pwm(m1, m2, m3, m4)
+
+    def _send_motion(self, vx: float, wz: float):
+        """
+        TreeboBase.set_motion 사용 (보드의 속도 제어/기구학 활용).
+        """
+        if self.debug_tx:
+            self.get_logger().info(f"TX MOTION vx={vx:.3f} wz={wz:.3f}")
+        self.base.set_motion(vx, 0.0, wz)
+
+    def _send_stop(self):
+        if self.use_motion_mode:
+            self._send_motion(0.0, 0.0)
+        else:
+            self._send_pwm(0, 0, 0, 0)
 
     # ---------- ROS callbacks ----------
     def cb_cmd(self, msg: Twist):
         vx = float(msg.linear.x)
         wz = float(msg.angular.z)
 
-        # 회전 스케일(조이스틱 turn이 약할 때만 키우기 용도)
+        # 회전 스케일
         wz *= self.turn_scale
 
-        # safety clamp
+        # 안전 클램프
         vx = self._clamp(vx, -self.max_lin, self.max_lin)
         wz = self._clamp(wz, -self.max_ang, self.max_ang)
 
+        # 데드존 적용
         if abs(vx) < self.vx_deadzone:
             vx = 0.0
         if abs(wz) < self.wz_deadzone:
             wz = 0.0
 
-        # 차동근사: 좌/우 선속도
+        # motion 모드: 보드의 속도 제어 사용
+        if self.use_motion_mode:
+            self._send_motion(vx, wz)
+            self.last_cmd_time = self.get_clock().now()
+            return
+
+        # ---- 여기부터 PWM 모드 (per-motor gain 사용) ----
+        # 차동 근사: 좌/우 선속도
         v_left = vx - wz * (self.track / 2.0)
         v_right = vx + wz * (self.track / 2.0)
 
         left_norm = self._clamp(v_left / max(self.max_lin, 1e-3), -1.0, 1.0)
         right_norm = self._clamp(v_right / max(self.max_lin, 1e-3), -1.0, 1.0)
+        # ---- 후진일 때만 추가 보정 (방향별 gain) ----
+        if left_norm < 0.0:
+            left_norm = self._clamp(left_norm * self.gain_left_rev_factor, -1.0, 1.0)
+        if right_norm < 0.0:
+            right_norm = self._clamp(right_norm * self.gain_right_rev_factor, -1.0, 1.0)
+        # gain 적용 (정규화 기준)
+        n1 = self.apply_gain_norm(left_norm, self.gain["m1"], self.invert["m1"])
+        n2 = self.apply_gain_norm(left_norm, self.gain["m2"], self.invert["m2"])
+        n3 = self.apply_gain_norm(right_norm, self.gain["m3"], self.invert["m3"])
+        n4 = self.apply_gain_norm(right_norm, self.gain["m4"], self.invert["m4"])
 
-        if self.use_pwm:
-            # ★ 중요: gain은 norm에 적용 후 PWM 변환 (pwm_min 아래로 떨어져 멈추는 문제 방지)
-            n1 = self.apply_gain_norm(left_norm, self.gain["m1"], self.invert["m1"])
-            n2 = self.apply_gain_norm(left_norm, self.gain["m2"], self.invert["m2"])
-            n3 = self.apply_gain_norm(right_norm, self.gain["m3"], self.invert["m3"])
-            n4 = self.apply_gain_norm(right_norm, self.gain["m4"], self.invert["m4"])
-            m1 = self._to_pwm(n1)
-            m2 = self._to_pwm(n2)
-            m3 = self._to_pwm(n3)
-            m4 = self._to_pwm(n4)
-        else:
-            # speed mode placeholder (0~1000)
-            n1 = self.apply_gain_norm(left_norm, self.gain["m1"], self.invert["m1"])
-            n2 = self.apply_gain_norm(left_norm, self.gain["m2"], self.invert["m2"])
-            n3 = self.apply_gain_norm(right_norm, self.gain["m3"], self.invert["m3"])
-            n4 = self.apply_gain_norm(right_norm, self.gain["m4"], self.invert["m4"])
-            m1 = int(n1 * 1000)
-            m2 = int(n2 * 1000)
-            m3 = int(n3 * 1000)
-            m4 = int(n4 * 1000)
+        # -1~1 → -100~100 (%)
+        m1 = self._to_pwm_percent(n1)
+        m2 = self._to_pwm_percent(n2)
+        m3 = self._to_pwm_percent(n3)
+        m4 = self._to_pwm_percent(n4)
 
-        self._send_motor(m1, m2, m3, m4)
+        self._send_pwm(m1, m2, m3, m4)
         self.last_cmd_time = self.get_clock().now()
 
     def _watchdog(self):
+        """
+        일정 시간 이상 cmd_vel이 안 들어오면 정지.
+        """
         now = self.get_clock().now()
         dt = (now - self.last_cmd_time).nanoseconds * 1e-9
         if dt > self.cmd_timeout:
-            self._send_motor(0, 0, 0, 0)
+            self._send_stop()
 
-    # ---------- UART RX ----------
-    def _rx_loop(self):
-        buf = b""
-        while self._running:
-            try:
-                data = self.ser.read(256)
-                if not data:
-                    continue
+    # ---------- encoder polling ----------
+    def _enc_timer_cb(self):
+        """
+        TreeboBase 내부 상태에서 엔코더 누적값을 읽어
+        encoder_raw / wheel_delta_ticks / wheel_ticks_per_sec 퍼블리시.
+        """
+        e1, e2, e3, e4 = self.base.get_encoders()
+        now_t = time.time()
+        ms = int((now_t - self._start_time) * 1000.0)
 
-                buf += data
-                while b"\n" in buf:
-                    raw, buf = buf.split(b"\n", 1)
-                    line = raw.strip().decode(errors="ignore")
-                    if not line:
-                        continue
-                    if not line.startswith("ENC "):
-                        continue
+        # 1) raw encoder
+        msg = Int32MultiArray()
+        msg.data = [ms, e1, e2, e3, e4]
+        self.pub_enc.publish(msg)
 
-                    parts = line.split()
-                    if len(parts) < 6:
-                        continue
+        # 이전 값이 없으면 여기서 초기화만
+        if self._last_enc is None:
+            self._last_enc = (now_t, e1, e2, e3, e4)
+            return
 
-                    try:
-                        ms = int(parts[1])
-                        e1 = int(parts[2]); e2 = int(parts[3]); e3 = int(parts[4]); e4 = int(parts[5])
-                    except ValueError:
-                        continue
+        last_t, le1, le2, le3, le4 = self._last_enc
+        dt = now_t - last_t
+        if dt <= 1e-3:
+            return
 
-                    # 1) encoder_raw publish
-                    msg = Int32MultiArray()
-                    msg.data = [ms, e1, e2, e3, e4]
-                    self.pub_enc.publish(msg)
+        de1 = e1 - le1
+        de2 = e2 - le2
+        de3 = e3 - le3
+        de4 = e4 - le4
 
-                    # 2) speed / delta ticks
-                    now_t = time.time()
-                    if self._last_enc is not None:
-                        last_t, last_ms, le1, le2, le3, le4 = self._last_enc
-                        dt = now_t - last_t
-                        if dt > 1e-3:
-                            de1 = e1 - le1
-                            de2 = e2 - le2
-                            de3 = e3 - le3
-                            de4 = e4 - le4
+        # delta ticks publish
+        if self.pub_delta is not None:
+            dmsg = Int32MultiArray()
+            dmsg.data = [ms, de1, de2, de3, de4]
+            self.pub_delta.publish(dmsg)
 
-                            if self.pub_delta is not None:
-                                dmsg = Int32MultiArray()
-                                dmsg.data = [ms, de1, de2, de3, de4]
-                                self.pub_delta.publish(dmsg)
+        # ticks/s publish
+        if self.pub_speed is not None:
+            s1 = de1 / dt
+            s2 = de2 / dt
+            s3 = de3 / dt
+            s4 = de4 / dt
 
-                            if self.pub_speed is not None:
-                                s1 = de1 / dt
-                                s2 = de2 / dt
-                                s3 = de3 / dt
-                                s4 = de4 / dt
-                                smsg = Float32MultiArray()
-                                smsg.data = [float(s1), float(s2), float(s3), float(s4)]
-                                self.pub_speed.publish(smsg)
+            smsg = Float32MultiArray()
+            smsg.data = [float(s1), float(s2), float(s3), float(s4)]
+            self.pub_speed.publish(smsg)
 
-                                if self.debug_enc_speed and (now_t - self._last_speed_log_t) >= self.debug_enc_period:
-                                    self._last_speed_log_t = now_t
-                                    self.get_logger().info(
-                                        f"ENC_SPEED ticks/s m1={s1:.1f} m2={s2:.1f} m3={s3:.1f} m4={s4:.1f}"
-                                    )
+            if self.debug_enc_speed and (now_t - self._last_speed_log_t) >= self.debug_enc_period:
+                self._last_speed_log_t = now_t
+                self.get_logger().info(
+                    f"ENC_SPEED ticks/s m1={s1:.1f} m2={s2:.1f} m3={s3:.1f} m4={s4:.1f}"
+                )
 
-                    self._last_enc = (now_t, ms, e1, e2, e3, e4)
-
-            except Exception:
-                time.sleep(0.01)
+        self._last_enc = (now_t, e1, e2, e3, e4)
 
     # ---------- shutdown ----------
     def destroy_node(self):
-        self._running = False
+        # 정지 명령 + auto_report off 정도는 선택적으로
         try:
-            self._send_motor(0, 0, 0, 0)
+            self._send_stop()
         except Exception:
             pass
         try:
-            if self._rx_thread is not None:
-                self._rx_thread.join(timeout=1.0)
+            self.base.set_auto_report(False, persist=False)
         except Exception:
             pass
         try:
-            self.ser.close()
+            self.base.close()
         except Exception:
             pass
         super().destroy_node()
@@ -323,7 +352,7 @@ class TreeboBringup(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = TreeboBringup()
+    node = TreeboBringupTreebolib()
     try:
         rclpy.spin(node)
     finally:

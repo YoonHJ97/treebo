@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'odom_publisher = treebo_odom.odom_publisher:main',
             'odom_source = treebo_odom.odom_source:main',
+            'encoder_calib_test = treebo_odom.encoder_calib_test:main',
         ],
     },
 )
