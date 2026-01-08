@@ -9,8 +9,8 @@
         <right_joint>rear_right_wheel_joint</right_joint>
 
         <!-- 실제 치수 -->
-        <wheel_separation>0.35</wheel_separation>
-        <wheel_radius>0.05</wheel_radius>
+        <wheel_separation>0.20</wheel_separation>
+        <wheel_radius>0.04</wheel_radius>
 
         <!-- ROS <-> GZ 브리지 토픽 -->
         <topic>cmd_vel</topic>

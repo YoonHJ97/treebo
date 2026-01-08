@@ -45,6 +45,8 @@ class TreeboBringupTreebolib(Node):
         self.declare_parameter("max_ang_vel", 6.0)         # rad/s
         self.declare_parameter("turn_scale", 0.85)          # 회전만 키울 때
         self.declare_parameter("track_width", 0.12)        # m (좌우 바퀴 간 거리)
+        self.declare_parameter("invert_cmd_vel", True)
+        self.declare_parameter("invert_cmd_vel_angular", False)
 
         self.declare_parameter("vx_deadzone", 0.02)
         self.declare_parameter("wz_deadzone", 0.05)
@@ -87,6 +89,8 @@ class TreeboBringupTreebolib(Node):
         self.max_ang = float(self.get_parameter("max_ang_vel").value)
         self.turn_scale = float(self.get_parameter("turn_scale").value)
         self.track = float(self.get_parameter("track_width").value)
+        self.invert_cmd_vel = bool(self.get_parameter("invert_cmd_vel").value)
+        self.invert_cmd_vel_angular = bool(self.get_parameter("invert_cmd_vel_angular").value)
 
         self.vx_deadzone = float(self.get_parameter("vx_deadzone").value)
         self.wz_deadzone = float(self.get_parameter("wz_deadzone").value)
@@ -221,6 +225,11 @@ class TreeboBringupTreebolib(Node):
     def cb_cmd(self, msg: Twist):
         vx = float(msg.linear.x)
         wz = float(msg.angular.z)
+
+        if self.invert_cmd_vel:
+            vx = -vx
+        if self.invert_cmd_vel_angular:
+            wz = -wz
 
         # 회전 스케일
         wz *= self.turn_scale

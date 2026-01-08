@@ -22,6 +22,8 @@ def _rewrite_initial_pose_params(context):
     set_initial_pose = (
         LaunchConfiguration("set_initial_pose").perform(context).lower() == "true"
     )
+    if not set_initial_pose:
+        return []
     initial_pose_x = float(LaunchConfiguration("initial_pose_x").perform(context))
     initial_pose_y = float(LaunchConfiguration("initial_pose_y").perform(context))
     initial_pose_yaw = float(LaunchConfiguration("initial_pose_yaw").perform(context))
@@ -47,19 +49,19 @@ def generate_launch_description():
     params_file = LaunchConfiguration("params_file")
     use_sim_time = LaunchConfiguration("use_sim_time")
     autostart = LaunchConfiguration("autostart")
-    slam = LaunchConfiguration("slam")
-    use_composition = LaunchConfiguration("use_composition")
+    use_respawn = LaunchConfiguration("use_respawn")
+    log_level = LaunchConfiguration("log_level")
     set_initial_pose = LaunchConfiguration("set_initial_pose")
     initial_pose_x = LaunchConfiguration("initial_pose_x")
     initial_pose_y = LaunchConfiguration("initial_pose_y")
     initial_pose_yaw = LaunchConfiguration("initial_pose_yaw")
 
-    default_params = os.path.join(
-        get_package_share_directory("treebo_navigation"),
-        "config",
-        "nav2_params.yaml",
+    nav_share = get_package_share_directory("treebo_navigation")
+    default_params = os.path.join(nav_share, "config", "nav2_params.yaml")
+    localization_launch = os.path.join(nav_share, "launch", "localization.launch.py")
+    navigation_nodes_launch = os.path.join(
+        nav_share, "launch", "navigation_nodes.launch.py"
     )
-    nav2_bringup_dir = get_package_share_directory("nav2_bringup")
 
     return LaunchDescription(
         [
@@ -84,18 +86,18 @@ def generate_launch_description():
                 description="Autostart Nav2",
             ),
             DeclareLaunchArgument(
-                "slam",
-                default_value="False",
-                description="Use SLAM (slam_toolbox)",
+                "use_respawn",
+                default_value="false",
+                description="Respawn nodes if they crash",
             ),
             DeclareLaunchArgument(
-                "use_composition",
-                default_value="False",
-                description="Use composed bringup",
+                "log_level",
+                default_value="info",
+                description="Logging level",
             ),
             DeclareLaunchArgument(
                 "set_initial_pose",
-                default_value="true",
+                default_value="false",
                 description="Set AMCL initial pose from parameters",
             ),
             DeclareLaunchArgument(
@@ -115,16 +117,24 @@ def generate_launch_description():
             ),
             OpaqueFunction(function=_rewrite_initial_pose_params),
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    os.path.join(nav2_bringup_dir, "launch", "bringup_launch.py")
-                ),
+                PythonLaunchDescriptionSource(localization_launch),
                 launch_arguments={
                     "map": map_yaml,
                     "params_file": params_file,
                     "use_sim_time": use_sim_time,
                     "autostart": autostart,
-                    "slam": slam,
-                    "use_composition": use_composition,
+                    "use_respawn": use_respawn,
+                    "log_level": log_level,
+                }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(navigation_nodes_launch),
+                launch_arguments={
+                    "params_file": params_file,
+                    "use_sim_time": use_sim_time,
+                    "autostart": autostart,
+                    "use_respawn": use_respawn,
+                    "log_level": log_level,
                 }.items(),
             ),
         ]

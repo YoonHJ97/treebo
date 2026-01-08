@@ -15,23 +15,23 @@
     <!-- CHASSIS -->
     <link name="chassis">
         <visual>
-            <origin xyz="0.1 0 0.075"/>
+            <origin xyz="0 0 0.075"/>
             <geometry><box size="0.4 0.3 0.1"/></geometry>
             <material name="white"/>
         </visual>
         <collision>
-            <origin xyz="0.1 0 0.075"/>
+            <origin xyz="0 0 0.075"/>
             <geometry><box size="0.4 0.3 0.1"/></geometry>
         </collision>
         <xacro:inertial_box mass="0.4" x="0.4" y="0.3" z="0.1">
-        <origin xyz="0.1 0 0.075" rpy="0 0 0"/>
+        <origin xyz="0 0 0.075" rpy="0 0 0"/>
         </xacro:inertial_box>
     </link>
 
     <joint name="chassis_joint" type="fixed">
         <parent link="base_link"/>
         <child link="chassis"/>
-        <origin xyz="-0.1 0 0"/>
+        <origin xyz="0 0 0"/>
     </joint>
 
 
@@ -149,7 +149,7 @@
         <parent link="chassis"/>
         <child link="lidar_mount"/>
         <!-- 섀시 위쪽 중앙에 배치. 필요시 xyz 조정 -->
-        <origin xyz="0.0 0.0 0.09" rpy="0 0 0"/>
+        <origin xyz="-0.085 0.0 0.09" rpy="0 0 0"/>
     </joint>
 
     <!-- 레이저 링크 라이다 본체를 단순 실린더로 표현 -->

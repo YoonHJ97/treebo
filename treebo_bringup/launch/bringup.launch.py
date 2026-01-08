@@ -30,6 +30,8 @@ def generate_launch_description():
     invert_rotation = LaunchConfiguration("invert_rotation")
     yaw_offset = LaunchConfiguration("yaw_offset")
     lidar_inverted = LaunchConfiguration("lidar_inverted")
+    invert_cmd_vel = LaunchConfiguration("invert_cmd_vel")
+    invert_cmd_vel_angular = LaunchConfiguration("invert_cmd_vel_angular")
     # ---------- 1) Treebo bringup 노드 ----------
     bringup_node = Node(
         package="treebo_bringup",
@@ -38,6 +40,8 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "track_width": 0.397,        # m (좌우 바퀴 사이 거리)
+            "invert_cmd_vel": invert_cmd_vel,
+            "invert_cmd_vel_angular": invert_cmd_vel_angular,
         }]
     )
     joint_state_pub = Node(
@@ -56,7 +60,7 @@ def generate_launch_description():
             "robot_description": Command([
                 FindExecutable(name="xacro"),
                 " ",
-                xacro_file
+                xacro_file,
             ]),
         }],
     )
@@ -130,6 +134,16 @@ def generate_launch_description():
                 "lidar_inverted",
                 default_value="false",
                 description="Invert lidar scan data",
+            ),
+            DeclareLaunchArgument(
+                "invert_cmd_vel",
+                default_value="true",
+                description="Invert cmd_vel linear and angular directions",
+            ),
+            DeclareLaunchArgument(
+                "invert_cmd_vel_angular",
+                default_value="false",
+                description="Invert cmd_vel angular direction",
             ),
             bringup_node,
             # upload_launch,
