@@ -4,7 +4,7 @@ slam_toolbox:
     odom_frame: "odom"
     map_frame: "map"
     base_frame: "base_link"   # ★ 여기 절대 건드리지 말기
-    scan_topic: "/scan"
+    scan_topic: "/scan_filtered"
 
     mode: "mapping"
     localization_only: false

@@ -16,14 +16,14 @@
     <link name="chassis">
         <visual>
             <origin xyz="0 0 0.075"/>
-            <geometry><box size="0.4 0.3 0.1"/></geometry>
+            <geometry><box size="0.30 0.50 0.10"/></geometry>
             <material name="white"/>
         </visual>
         <collision>
             <origin xyz="0 0 0.075"/>
-            <geometry><box size="0.4 0.3 0.1"/></geometry>
+            <geometry><box size="0.30 0.50 0.10"/></geometry>
         </collision>
-        <xacro:inertial_box mass="0.4" x="0.4" y="0.3" z="0.1">
+        <xacro:inertial_box mass="0.4" x="0.30" y="0.50" z="0.10">
         <origin xyz="0 0 0.075" rpy="0 0 0"/>
         </xacro:inertial_box>
     </link>
@@ -52,7 +52,7 @@
         <parent link="base_link"/>
         <child  link="front_left_wheel"/>
         <!-- x = +0.095, y = +0.1075 -->
-        <origin xyz="0.095 0.1075 0" rpy="-${pi/2} 0 0"/>
+        <origin xyz="0.10 0.25 0" rpy="-${pi/2} 0 0"/>
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -73,7 +73,7 @@
         <parent link="base_link"/>
         <child  link="front_right_wheel"/>
         <!-- x = +0.095, y = -0.1075 -->
-        <origin xyz="0.095 -0.1075 0" rpy="${pi/2} 0 0"/>
+        <origin xyz="0.10 -0.25 0" rpy="${pi/2} 0 0"/>
         <axis xyz="0 0 -1"/>
     </joint>
 
@@ -94,7 +94,7 @@
         <parent link="base_link"/>
         <child  link="rear_left_wheel"/>
         <!-- x = -0.095, y = +0.1075 -->
-        <origin xyz="-0.095 0.1075 0" rpy="-${pi/2} 0 0"/>
+        <origin xyz="-0.10 0.25 0" rpy="-${pi/2} 0 0"/>
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -115,7 +115,7 @@
         <parent link="base_link"/>
         <child  link="rear_right_wheel"/>
         <!-- x = -0.095, y = -0.1075 -->
-        <origin xyz="-0.095 -0.1075 0" rpy="${pi/2} 0 0"/>
+        <origin xyz="-0.10 -0.25 0" rpy="${pi/2} 0 0"/>
         <axis xyz="0 0 -1"/>
     </joint>
 
@@ -149,7 +149,7 @@
         <parent link="chassis"/>
         <child link="lidar_mount"/>
         <!-- 섀시 위쪽 중앙에 배치. 필요시 xyz 조정 -->
-        <origin xyz="-0.085 0.0 0.09" rpy="0 0 0"/>
+        <origin xyz="0.1 0.0 0.125" rpy="0 0 0"/>
     </joint>
 
     <!-- 레이저 링크 라이다 본체를 단순 실린더로 표현 -->

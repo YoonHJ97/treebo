@@ -16,6 +16,9 @@ setup(
             glob(os.path.join('launch', '*.launch.py'))),
         ('share/' + package_name + '/param',
             glob(os.path.join('param', '*.yaml'))),
+        ('share/' + package_name + '/config',
+            glob(os.path.join('config', '*.yaml'))),
+            
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,6 +34,7 @@ setup(
     entry_points={
         'console_scripts': [
             'bringup = treebo_bringup.bringup:main',
+            'motor_calib = treebo_bringup.motor_calib:main',
         ],
     },
 )
