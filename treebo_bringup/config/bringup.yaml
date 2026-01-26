@@ -23,8 +23,8 @@ treebo_bringup:
     # Per-motor calibration
     gain_m1: 1.000   # FL
     gain_m2: 0.977   # RL
-    gain_m3: 0.947   # RR
-    gain_m4: 0.922   # FR
+    gain_m3: 0.78  # RR
+    gain_m4: 0.73   # FR
 
     # Reverse-direction (backward) extra factors
     gain_left_rev_factor: 1.00

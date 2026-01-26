@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 # coding: utf-8
-"""
-Treebo Base Serial Driver (single-file version)
-
-- Yahboom Rosmaster 계열 보드의 시리얼 프로토콜을 분석해서
-  Treebo 전용으로 재구현한 라이브러리입니다.
-- 특정 업체와 공식적인 연관이 없으며, 하드웨어 프로토콜만 참고합니다.
-"""
 
 import struct
 import time
